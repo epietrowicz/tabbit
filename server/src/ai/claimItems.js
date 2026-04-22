@@ -39,11 +39,78 @@ const defaultAIAgentConfig = {
 };
 
 /**
+ * @param {unknown} v
+ * @returns {number}
+ */
+function numOrZero(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/**
+ * @param {number} n
+ */
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Equal share of tax, tip, and unitemized subtotal gap for one diner (split_party_size ways).
+ * Stored on the claim message, not on line rows.
+ *
+ * @param {Array<{ line_total: number }>} lineItems
+ * @param {{
+ *   subtotal?: number | null,
+ *   tax_total?: number | null,
+ *   tip_total?: number | null,
+ *   split_party_size?: number | null,
+ * } | null | undefined} receiptTotals
+ * @param {boolean} hasClaimRows
+ */
+function computeSharedOverheadAmount(lineItems, receiptTotals, hasClaimRows) {
+  if (!hasClaimRows || !receiptTotals) {
+    return 0;
+  }
+
+  const linesSum = lineItems.reduce((s, li) => s + numOrZero(li.line_total), 0);
+  if (linesSum <= 0) {
+    return 0;
+  }
+
+  const tax = numOrZero(receiptTotals.tax_total);
+  const tip = numOrZero(receiptTotals.tip_total);
+  const subtotalRaw = receiptTotals.subtotal;
+  const sub =
+    subtotalRaw != null && subtotalRaw !== ""
+      ? numOrZero(subtotalRaw)
+      : linesSum;
+  const unitemized = Math.max(0, sub - linesSum);
+  const sharedPool = tax + tip + unitemized;
+
+  const nRaw = Number(receiptTotals.split_party_size);
+  const partySize =
+    Number.isFinite(nRaw) && nRaw >= 1
+      ? Math.min(Math.max(Math.round(nRaw), 1), 100)
+      : 1;
+  const perDiner = sharedPool / partySize;
+  return perDiner > 0 ? round2(perDiner) : 0;
+}
+
+/**
  * @param {Array<{ lineItemId: number, quantityClaimed: number, notes?: string }>} rawAllocations
  * @param {Array<{ id: number, quantity: number, unit_price: number, line_total: number, description: string }>} lineItems
- * @returns {Array<{ receipt_line_item_id: number, quantity_claimed: number, allocated_amount: number }>}
+ * @param {{
+ *   subtotal?: number | null,
+ *   tax_total?: number | null,
+ *   tip_total?: number | null,
+ *   split_party_size?: number | null,
+ * } | null | undefined} [receiptTotals]
+ * @returns {{
+ *   claimRows: Array<{ receipt_line_item_id: number, quantity_claimed: number, allocated_amount: number }>,
+ *   sharedOverheadAmount: number,
+ * }}
  */
-export function buildReceiptClaimRows(rawAllocations, lineItems) {
+export function buildReceiptClaimRows(rawAllocations, lineItems, receiptTotals) {
   const byId = new Map(lineItems.map((li) => [li.id, li]));
   /** @type {Map<number, number>} */
   const qtyByLine = new Map();
@@ -86,7 +153,12 @@ export function buildReceiptClaimRows(rawAllocations, lineItems) {
       allocated_amount: allocated,
     });
   }
-  return rows;
+  const sharedOverheadAmount = computeSharedOverheadAmount(
+    lineItems,
+    receiptTotals,
+    rows.length > 0,
+  );
+  return { claimRows: rows, sharedOverheadAmount };
 }
 
 /**
@@ -95,14 +167,24 @@ export function buildReceiptClaimRows(rawAllocations, lineItems) {
  *
  * @param {string} plainText
  * @param {Array<{ id: number, line_index: number, description: string, quantity: number, unit_price: number, line_total: number }>} lineItems
- * @returns {Promise<{ allocations: Array<{ lineItemId: number, quantityClaimed: number, notes: string }>, claimRows: ReturnType<typeof buildReceiptClaimRows> }>}
+ * @param {{
+ *   subtotal?: number | null,
+ *   tax_total?: number | null,
+ *   tip_total?: number | null,
+ *   split_party_size?: number | null,
+ * } | null | undefined} [receiptTotals]
+ * @returns {Promise<{ allocations: Array<{ lineItemId: number, quantityClaimed: number, notes: string }>, claimRows: Array<{ receipt_line_item_id: number, quantity_claimed: number, allocated_amount: number }>, sharedOverheadAmount: number }>}
  */
-export async function parsePlainTextToReceiptClaims(plainText, lineItems) {
+export async function parsePlainTextToReceiptClaims(
+  plainText,
+  lineItems,
+  receiptTotals,
+) {
   if (!plainText.trim()) {
-    return { allocations: [], claimRows: [] };
+    return { allocations: [], claimRows: [], sharedOverheadAmount: 0 };
   }
   if (!Array.isArray(lineItems) || lineItems.length === 0) {
-    return { allocations: [], claimRows: [] };
+    return { allocations: [], claimRows: [], sharedOverheadAmount: 0 };
   }
 
   const agentConfig = await aiClient.agentConfig(
@@ -163,6 +245,10 @@ export async function parsePlainTextToReceiptClaims(plainText, lineItems) {
       }))
     : [];
 
-  const claimRows = buildReceiptClaimRows(allocations, lineItems);
-  return { allocations, claimRows };
+  const { claimRows, sharedOverheadAmount } = buildReceiptClaimRows(
+    allocations,
+    lineItems,
+    receiptTotals,
+  );
+  return { allocations, claimRows, sharedOverheadAmount };
 }

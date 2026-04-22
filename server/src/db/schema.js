@@ -15,8 +15,10 @@ export function applySchema(db) {
       subtotal REAL,
       tax_total REAL,
       tip_total REAL,
+      miscellaneous_charges_total REAL,
       total REAL,
       grand_total REAL,
+      split_party_size INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -38,6 +40,8 @@ export function applySchema(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       receipt_id INTEGER NOT NULL REFERENCES receipt_uploads(id) ON DELETE CASCADE,
       body TEXT NOT NULL,
+      claimer_name TEXT,
+      shared_overhead_amount REAL NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -58,33 +62,4 @@ export function applySchema(db) {
     CREATE INDEX IF NOT EXISTS idx_receipt_claims_line_item_id
       ON receipt_claims(receipt_line_item_id);
   `);
-
-  try {
-    db.exec(`ALTER TABLE receipt_uploads DROP COLUMN analysis_text`);
-  } catch {
-    /* column absent or SQLite version without DROP COLUMN */
-  }
-
-  try {
-    db.exec(`DROP TABLE IF EXISTS summaries`);
-  } catch {
-    /* ignore */
-  }
-
-  for (const [col, sqlType] of [
-    ["merchant_name", "TEXT"],
-    ["transaction_date", "TEXT"],
-    ["currency", "TEXT"],
-    ["subtotal", "REAL"],
-    ["tax_total", "REAL"],
-    ["tip_total", "REAL"],
-    ["total", "REAL"],
-    ["grand_total", "REAL"],
-  ]) {
-    try {
-      db.exec(`ALTER TABLE receipt_uploads ADD COLUMN ${col} ${sqlType}`);
-    } catch {
-      /* column already exists */
-    }
-  }
 }

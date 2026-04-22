@@ -3,7 +3,7 @@ import { Link, Outlet } from "react-router-dom";
 export default function Layout() {
   return (
     <div className="min-h-svh">
-      <header className="border-b border-[var(--border)] px-5 py-4">
+      {/* <header className="border-b border-[var(--border)] px-5 py-4">
         <nav className="mx-auto flex max-w-xl items-center justify-between gap-4">
           <Link
             to="/"
@@ -18,7 +18,7 @@ export default function Layout() {
             Upload
           </Link>
         </nav>
-      </header>
+      </header> */}
       <main>
         <Outlet />
       </main>

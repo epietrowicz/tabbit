@@ -87,22 +87,40 @@ export function createApp() {
         error: "Message is too long (max 8000 characters).",
       });
     }
+    const rawName = req.body?.name ?? req.body?.claimerName ?? req.body?.claimer_name;
+    let claimerName = null;
+    if (typeof rawName === "string") {
+      const trimmed = rawName.trim();
+      if (trimmed.length > 200) {
+        return res.status(400).json({
+          error: "Name is too long (max 200 characters).",
+        });
+      }
+      claimerName = trimmed || null;
+    }
     try {
       const row = getReceiptById(id);
       if (!row) {
         return res.status(404).json({ error: "Receipt not found." });
       }
-      const message = insertReceiptClaimMessage(id, text);
-      let claims = [];
+      let claimRows = [];
+      let sharedOverheadAmount = 0;
       let claimParseError = null;
       try {
         const lineItems = listReceiptLineItems(id);
         if (lineItems.length > 0) {
-          const { claimRows } = await parsePlainTextToReceiptClaims(
+          const parsed = await parsePlainTextToReceiptClaims(
             text,
             lineItems,
+            {
+              subtotal: row.subtotal,
+              tax_total: row.tax_total,
+              tip_total: row.tip_total,
+              split_party_size: row.split_party_size,
+            },
           );
-          claims = insertReceiptClaims(message.id, claimRows);
+          claimRows = parsed.claimRows;
+          sharedOverheadAmount = parsed.sharedOverheadAmount ?? 0;
         }
       } catch (parseErr) {
         console.error(parseErr);
@@ -110,6 +128,16 @@ export function createApp() {
           parseErr instanceof Error
             ? parseErr.message
             : "Failed to parse claim against line items.";
+      }
+      const message = insertReceiptClaimMessage(
+        id,
+        text,
+        claimerName,
+        sharedOverheadAmount,
+      );
+      let claims = [];
+      if (claimRows.length > 0) {
+        claims = insertReceiptClaims(message.id, claimRows);
       }
       res.status(201).json({
         message,
@@ -156,6 +184,9 @@ export function createApp() {
         return;
       }
 
+      const splitPartySize =
+        req.body?.split_party_size ?? req.body?.splitPartySize;
+
       try {
         const row = db.transaction(() => {
           const r = insertReceiptUpload(
@@ -164,6 +195,7 @@ export function createApp() {
             mimetype,
             size,
             itemization,
+            splitPartySize,
           );
           insertReceiptLineItems(r.id, itemization);
           return r;

@@ -7,17 +7,14 @@ export function ReceiptDetailHeader({ receiptId, createdAt }) {
   return (
     <>
       <p className="mb-4">
-        <Link
-          to="/"
-          className="text-sm text-[var(--text)] underline-offset-4 hover:text-[var(--text-h)] hover:underline"
-        >
+        <Link to="/" className="link link-hover link-primary text-sm">
           ← Upload
         </Link>
       </p>
-      <h1 className="mb-2 text-3xl font-medium tracking-tight text-[var(--text-h)]">
+      <h1 className="mb-2 text-3xl font-semibold tracking-tight">
         Receipt #{receiptId}
       </h1>
-      <p className="mb-6 text-sm text-[var(--text)]">{createdAt}</p>
+      <p className="text-base-content/70 mb-6 text-sm">{createdAt}</p>
     </>
   );
 }

@@ -1,6 +1,57 @@
+import { appendFile, mkdir, stat } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
-import { OpenAIProvider } from "@launchdarkly/server-sdk-ai-openai";
-import { aiClient } from "../ld.js";
+import { ChatOpenAI } from "@langchain/openai";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** Local CSV appended on each successful analyzeReceiptImage run. */
+const RECEIPT_VISION_CSV_PATH =
+  process.env.RECEIPT_VISION_CSV_PATH ||
+  path.join(__dirname, "..", "..", "data", "receipt_vision_training.csv");
+
+/**
+ * @param {string} value
+ */
+function escapeCsvField(value) {
+  const s = String(value);
+  if (/[",\r\n]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+/**
+ * @param {string} dataUrl
+ * @param {unknown} dataObj
+ */
+async function appendReceiptVisionCsv(dataUrl, dataObj) {
+  try {
+    const dir = path.dirname(RECEIPT_VISION_CSV_PATH);
+    await mkdir(dir, { recursive: true });
+    let writeHeader = false;
+    try {
+      const st = await stat(RECEIPT_VISION_CSV_PATH);
+      writeHeader = st.size === 0;
+    } catch (e) {
+      if (/** @type {NodeJS.ErrnoException} */ (e).code === "ENOENT") {
+        writeHeader = true;
+      } else {
+        throw e;
+      }
+    }
+    const expectedResponse = JSON.stringify(dataObj);
+    const line = `${escapeCsvField(dataUrl)},${escapeCsvField(expectedResponse)}\n`;
+    const payload = writeHeader
+      ? `user_input,expected_response\n${line}`
+      : line;
+    await appendFile(RECEIPT_VISION_CSV_PATH, payload, "utf8");
+  } catch (err) {
+    console.error("receiptVision CSV append failed:", err);
+  }
+}
 
 /**
  * JSON Schema for OpenAI structured outputs (`response_format.type: json_schema`, strict).
@@ -50,39 +101,43 @@ const RECEIPT_ITEMIZATION_SCHEMA = {
 
 const defaultSystemText =
   "You are a receipt parser. Respond with JSON only, matching the schema.";
-const defaultLdContext = { kind: "user", key: "receipt-upload" };
-const defaultAIAgentConfig = {
-  enabled: true,
-  model: { name: "gpt-4o" },
-  provider: { name: "openai" },
-  instructions:
-    "You extract structured data from receipt photos. Prefer values printed on the receipt; use 0 for unknown amounts and empty string only when a text field is missing.",
-};
+const defaultInstructions =
+  "You extract structured data from receipt photos. Prefer values printed on the receipt; use 0 for unknown amounts and empty string only when a text field is missing.";
+
+function buildSystemPrompt() {
+  if (process.env.RECEIPT_VISION_SYSTEM?.trim()) {
+    return process.env.RECEIPT_VISION_SYSTEM.trim();
+  }
+  return `${defaultSystemText}\n\n${defaultInstructions}`;
+}
 
 export async function analyzeReceiptImage(filePath, mediaType) {
-  const agentConfig = await aiClient.agentConfig(
-    "receipt-itemizer",
-    defaultLdContext,
-    defaultAIAgentConfig,
-  );
-
-  if (!agentConfig.enabled || !agentConfig.tracker) {
-    throw new Error(
-      "Receipt itemizer AI config is disabled or missing a tracker.",
-    );
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is required for receipt vision.");
   }
 
-  const provider = await OpenAIProvider.create(agentConfig);
+  const modelName = process.env.RECEIPT_VISION_MODEL || "gpt-4o";
+  const baseLlm = new ChatOpenAI({
+    model: modelName,
+    temperature: 0,
+  });
+  const structuredLlm = baseLlm.withStructuredOutput(
+    RECEIPT_ITEMIZATION_SCHEMA,
+    {
+      name: "receipt_itemization",
+      strict: true,
+      method: "jsonSchema",
+    },
+  );
 
   const imageB64 = (await readFile(filePath)).toString("base64");
   const dataUrl = `data:${mediaType};base64,${imageB64}`;
 
-  const systemText = agentConfig.instructions ?? defaultSystemText;
+  const systemText = buildSystemPrompt();
 
-  const messages = [
-    { role: "system", content: systemText },
-    {
-      role: "user",
+  const data = await structuredLlm.invoke([
+    new SystemMessage(systemText),
+    new HumanMessage({
       content: [
         {
           type: "text",
@@ -93,17 +148,10 @@ export async function analyzeReceiptImage(filePath, mediaType) {
           image_url: { url: dataUrl },
         },
       ],
-    },
-  ];
+    }),
+  ]);
 
-  const { data, metrics } = await agentConfig.tracker.trackMetricsOf(
-    (result) => result.metrics,
-    () => provider.invokeStructuredModel(messages, RECEIPT_ITEMIZATION_SCHEMA),
-  );
-
-  if (!metrics.success) {
-    throw new Error("Receipt structured model invocation did not succeed.");
-  }
+  await appendReceiptVisionCsv(dataUrl, data);
 
   return data;
 }

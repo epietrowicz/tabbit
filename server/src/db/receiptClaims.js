@@ -2,7 +2,7 @@ import { db } from "./connection.js";
 
 /**
  * @param {number} receiptId
- * @returns {Array<{ id: number, receipt_id: number, body: string, created_at: string }>}
+ * @returns {Array<{ id: number, receipt_id: number, body: string, claimer_name: string | null, shared_overhead_amount: number, created_at: string }>}
  */
 export function listReceiptClaimMessages(receiptId) {
   const n = Number(receiptId);
@@ -10,7 +10,7 @@ export function listReceiptClaimMessages(receiptId) {
     return [];
   }
   const stmt = db.prepare(
-    `SELECT id, receipt_id, body, created_at
+    `SELECT id, receipt_id, body, claimer_name, shared_overhead_amount, created_at
      FROM receipt_claim_messages
      WHERE receipt_id = ?
      ORDER BY created_at ASC, id ASC`,
@@ -21,19 +21,35 @@ export function listReceiptClaimMessages(receiptId) {
 /**
  * @param {number} receiptId
  * @param {string} body
- * @returns {{ id: number, receipt_id: number, body: string, created_at: string }}
+ * @param {string | null | undefined} claimerName
+ * @param {unknown} [sharedOverheadRaw] tax/tip/common share for this diner (one row per message)
+ * @returns {{ id: number, receipt_id: number, body: string, claimer_name: string | null, shared_overhead_amount: number, created_at: string }}
  */
-export function insertReceiptClaimMessage(receiptId, body) {
+export function insertReceiptClaimMessage(
+  receiptId,
+  body,
+  claimerName,
+  sharedOverheadRaw,
+) {
   const n = Number(receiptId);
   if (!Number.isInteger(n) || n < 1) {
     throw new RangeError("Invalid receipt id");
   }
+  const name =
+    typeof claimerName === "string" && claimerName.trim()
+      ? claimerName.trim()
+      : null;
+  let overhead = Number(sharedOverheadRaw);
+  if (!Number.isFinite(overhead) || overhead < 0) {
+    overhead = 0;
+  }
+  overhead = Math.round(overhead * 100) / 100;
   const stmt = db.prepare(
-    `INSERT INTO receipt_claim_messages (receipt_id, body)
-     VALUES (?, ?)
-     RETURNING id, receipt_id, body, created_at`,
+    `INSERT INTO receipt_claim_messages (receipt_id, body, claimer_name, shared_overhead_amount)
+     VALUES (?, ?, ?, ?)
+     RETURNING id, receipt_id, body, claimer_name, shared_overhead_amount, created_at`,
   );
-  const row = stmt.get(n, body);
+  const row = stmt.get(n, body, name, overhead);
   return row;
 }
 

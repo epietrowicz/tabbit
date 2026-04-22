@@ -1,6 +1,5 @@
 import { init } from "@launchdarkly/node-server-sdk";
 import { initAi } from "@launchdarkly/server-sdk-ai";
-import { OpenAIProvider } from "@launchdarkly/server-sdk-ai-openai";
 
 import dotenv from "dotenv";
 
