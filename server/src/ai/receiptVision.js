@@ -3,7 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 import { ChatOpenAI } from "@langchain/openai";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { createAgent } from "langchain";
+import { mapAiConfigTools } from "./toolsHelper.js";
+import { aiClient } from "../ld.js";
+import { LangChainProvider } from "@launchdarkly/server-sdk-ai-langchain";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12,9 +16,6 @@ const RECEIPT_VISION_CSV_PATH =
   process.env.RECEIPT_VISION_CSV_PATH ||
   path.join(__dirname, "..", "..", "data", "receipt_vision_training.csv");
 
-/**
- * @param {string} value
- */
 function escapeCsvField(value) {
   const s = String(value);
   if (/[",\r\n]/.test(s)) {
@@ -23,10 +24,6 @@ function escapeCsvField(value) {
   return s;
 }
 
-/**
- * @param {string} dataUrl
- * @param {unknown} dataObj
- */
 async function appendReceiptVisionCsv(dataUrl, dataObj) {
   try {
     const dir = path.dirname(RECEIPT_VISION_CSV_PATH);
@@ -53,105 +50,72 @@ async function appendReceiptVisionCsv(dataUrl, dataObj) {
   }
 }
 
-/**
- * JSON Schema for OpenAI structured outputs (`response_format.type: json_schema`, strict).
- * With strict mode, every key in `properties` must appear in `required` (use empty string / 0 when unknown).
- */
-const RECEIPT_ITEMIZATION_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    merchantName: { type: "string" },
-    transactionDate: { type: "string" },
-    currency: { type: "string" },
-    lineItems: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          description: { type: "string" },
-          quantity: { type: "number" },
-          unitPrice: { type: "number" },
-          lineTotal: { type: "number" },
-        },
-        required: ["description", "quantity", "unitPrice", "lineTotal"],
-      },
-    },
-    subtotal: { type: "number" },
-    taxTotal: { type: "number" },
-    tipTotal: { type: "number" },
-    miscellaneousChargesTotal: { type: "number" },
-    total: { type: "number" },
-    grandTotal: { type: "number" },
-  },
-  required: [
-    "merchantName",
-    "transactionDate",
-    "currency",
-    "lineItems",
-    "subtotal",
-    "taxTotal",
-    "tipTotal",
-    "miscellaneousChargesTotal",
-    "total",
-    "grandTotal",
-  ],
-};
-
-const defaultSystemText =
-  "You are a receipt parser. Respond with JSON only, matching the schema.";
-const defaultInstructions =
-  "You extract structured data from receipt photos. Prefer values printed on the receipt; use 0 for unknown amounts and empty string only when a text field is missing.";
-
-function buildSystemPrompt() {
-  if (process.env.RECEIPT_VISION_SYSTEM?.trim()) {
-    return process.env.RECEIPT_VISION_SYSTEM.trim();
-  }
-  return `${defaultSystemText}\n\n${defaultInstructions}`;
+async function invokeReceiptItemizerAgent(agent, dataUrl) {
+  return agent.invoke({
+    messages: [
+      new HumanMessage({
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: dataUrl },
+          },
+        ],
+      }),
+    ],
+  });
 }
 
 export async function analyzeReceiptImage(filePath, mediaType) {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is required for receipt vision.");
-  }
+  const defaultLdContext = { kind: "user", key: "receipt_itemization" };
+  const defaultInstructions =
+    "You extract structured data from receipt photos. Prefer values printed on the receipt; use 0 for unknown amounts and empty string only when a text field is missing.";
 
-  const modelName = process.env.RECEIPT_VISION_MODEL || "gpt-4o";
-  const baseLlm = new ChatOpenAI({
-    model: modelName,
-    temperature: 0,
-  });
-  const structuredLlm = baseLlm.withStructuredOutput(
-    RECEIPT_ITEMIZATION_SCHEMA,
-    {
-      name: "receipt_itemization",
-      strict: true,
-      method: "jsonSchema",
-    },
-  );
+  const defaultAIAgentConfig = {
+    enabled: true,
+    model: { name: "gpt-4o" },
+    provider: { name: "openai" },
+    instructions: defaultInstructions,
+  };
 
   const imageB64 = (await readFile(filePath)).toString("base64");
   const dataUrl = `data:${mediaType};base64,${imageB64}`;
 
-  const systemText = buildSystemPrompt();
+  const aiConfig = await aiClient.agentConfig(
+    "receipt-itemizer",
+    defaultLdContext,
+    { enabled: true },
+    { image_data_url: dataUrl },
+  );
 
-  const data = await structuredLlm.invoke([
-    new SystemMessage(systemText),
-    new HumanMessage({
-      content: [
-        {
-          type: "text",
-          text: "Itemize this receipt. Apply the JSON schema exactly.",
-        },
-        {
-          type: "image_url",
-          image_url: { url: dataUrl },
-        },
-      ],
-    }),
-  ]);
+  if (!aiConfig.enabled) {
+    throw new Error("AI agent config is disabled");
+  }
 
-  await appendReceiptVisionCsv(dataUrl, data);
+  const model = new ChatOpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    model: aiConfig.model?.name ?? defaultAIAgentConfig.model.name,
+    temperature:
+      aiConfig.model?.parameters?.temperature ??
+      defaultAIAgentConfig.model.parameters.temperature,
+  });
 
+  const { tracker } = aiConfig;
+
+  const agent = createAgent({
+    model,
+    tools: mapAiConfigTools(aiConfig),
+    systemPrompt: aiConfig.instructions,
+  });
+
+  const { messages } = await tracker.trackMetricsOf(
+    LangChainProvider.getAIMetricsFromResponse,
+    () => invokeReceiptItemizerAgent(agent, dataUrl),
+  );
+
+  const lastAi = messages.filter((m) => AIMessage.isInstance(m)).at(-1);
+  if (!lastAi) {
+    throw new Error("Receipt itemizer returned no assistant message.");
+  }
+  const data = JSON.parse(lastAi.text);
   return data;
 }
