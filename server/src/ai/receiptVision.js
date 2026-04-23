@@ -80,31 +80,33 @@ export async function analyzeReceiptImage(filePath, mediaType) {
   const imageB64 = (await readFile(filePath)).toString("base64");
   const dataUrl = `data:${mediaType};base64,${imageB64}`;
 
-  const aiConfig = await aiClient.agentConfig(
+  const agentConfig = await aiClient.agentConfig(
     "receipt-itemizer",
     defaultLdContext,
     { enabled: true },
-    { image_data_url: dataUrl },
+    null,
   );
 
-  if (!aiConfig.enabled) {
-    throw new Error("AI agent config is disabled");
+  if (!agentConfig.enabled || !agentConfig.tracker) {
+    throw new Error(
+      "Receipt itemizer AI config is disabled or missing a tracker.",
+    );
   }
 
   const model = new ChatOpenAI({
     apiKey: process.env.OPENAI_API_KEY,
-    model: aiConfig.model?.name ?? defaultAIAgentConfig.model.name,
+    model: agentConfig.model?.name ?? defaultAIAgentConfig.model.name,
     temperature:
-      aiConfig.model?.parameters?.temperature ??
+      agentConfig.model?.parameters?.temperature ??
       defaultAIAgentConfig.model.parameters.temperature,
   });
 
-  const { tracker } = aiConfig;
+  const { tracker } = agentConfig;
 
   const agent = createAgent({
     model,
-    tools: mapAiConfigTools(aiConfig),
-    systemPrompt: aiConfig.instructions,
+    tools: mapAiConfigTools(agentConfig),
+    systemPrompt: agentConfig.instructions,
   });
 
   const { messages } = await tracker.trackMetricsOf(
