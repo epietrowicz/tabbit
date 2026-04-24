@@ -11,17 +11,18 @@ export function mapAiConfigTools(aiConfig) {
   }
 
   // Filter local tools to only include the tools that are in the LD AI Config
-  const configTools = allTools.filter((tool) =>
-    availableTools.includes(tool.name),
-  );
+  // const configTools = allTools.filter((tool) =>
+  //   availableTools.includes(tool.name),
+  // );
 
   // Build the tools array from the config tools
   const tools = [];
-  for (const configTool of configTools) {
-    const langchainTool = tool(configTool.fn, {
-      name: configTool.name,
-      description: configTool.description,
-      schema: configTool.schema,
+  for (const toolParam of toolsParam) {
+    const localTool = allTools.find((tool) => tool.name === toolParam.name);
+    const langchainTool = tool(localTool.fn, {
+      name: toolParam.name,
+      description: toolParam.description,
+      schema: toolParam.parameters,
     });
     tools.push(langchainTool);
   }

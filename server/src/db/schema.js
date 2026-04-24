@@ -19,6 +19,7 @@ export function applySchema(db) {
       total REAL,
       grand_total REAL,
       split_party_size INTEGER NOT NULL DEFAULT 1,
+      vision_error_message TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 

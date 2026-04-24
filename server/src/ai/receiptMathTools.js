@@ -1,19 +1,35 @@
-function addToolFn({ a, b }) {
+function addToolFn(input) {
+  const { a, b } = input;
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("Invalid input");
+  }
   console.log(`Using the add tool with ${a} + ${b}`);
   return a + b;
 }
 
-function subtractToolFn({ a, b }) {
+function subtractToolFn(input) {
+  const { a, b } = input;
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("Invalid input");
+  }
   console.log(`Using the subtract tool with ${a} - ${b}`);
   return a - b;
 }
 
-function multiplyToolFn({ a, b }) {
+function multiplyToolFn(input) {
+  const { a, b } = input;
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("Invalid input");
+  }
   console.log(`Using the multiply tool with ${a} * ${b}`);
   return a * b;
 }
 
-function divideToolFn({ a, b }) {
+function divideToolFn(input) {
+  const { a, b } = input;
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("Invalid input");
+  }
   console.log(`Using the divide tool with ${a} / ${b}`);
   return a / b;
 }

@@ -67,14 +67,18 @@ export function insertReceiptUpload(
   const total = numOrNull(itemization?.total);
   const grandTotal = numOrNull(itemization?.grandTotal);
   const splitPartySize = splitPartySizeOrDefault(splitPartySizeRaw);
+  const visionErrorMessage =
+    typeof itemization?.errorMessage === "string"
+      ? strOrNull(itemization.errorMessage)
+      : null;
 
   const stmt = db.prepare(
     `INSERT INTO receipt_uploads (
        stored_filename, original_filename, mimetype, size_bytes,
        merchant_name, transaction_date, currency,
        subtotal, tax_total, tip_total, miscellaneous_charges_total, total, grand_total,
-       split_party_size
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       split_party_size, vision_error_message
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING id, created_at`,
   );
   const row = stmt.get(
@@ -92,13 +96,14 @@ export function insertReceiptUpload(
     total,
     grandTotal,
     splitPartySize,
+    visionErrorMessage,
   );
   return row;
 }
 
 /**
  * @param {number} limit
- * @returns {Array<{ id: number, stored_filename: string, original_filename: string | null, mimetype: string, size_bytes: number, merchant_name: string | null, transaction_date: string | null, currency: string | null, subtotal: number | null, tax_total: number | null, tip_total: number | null, miscellaneous_charges_total: number | null, total: number | null, grand_total: number | null, split_party_size: number, created_at: string }>}
+ * @returns {Array<{ id: number, stored_filename: string, original_filename: string | null, mimetype: string, size_bytes: number, merchant_name: string | null, transaction_date: string | null, currency: string | null, subtotal: number | null, tax_total: number | null, tip_total: number | null, miscellaneous_charges_total: number | null, total: number | null, grand_total: number | null, split_party_size: number, vision_error_message: string | null, created_at: string }>}
  */
 export function listReceiptUploads(limit) {
   const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
@@ -106,7 +111,7 @@ export function listReceiptUploads(limit) {
     `SELECT id, stored_filename, original_filename, mimetype, size_bytes,
             merchant_name, transaction_date, currency,
             subtotal, tax_total, tip_total, miscellaneous_charges_total, total, grand_total,
-            split_party_size, created_at
+            split_party_size, vision_error_message, created_at
      FROM receipt_uploads
      ORDER BY id DESC
      LIMIT ?`,
@@ -116,7 +121,7 @@ export function listReceiptUploads(limit) {
 
 /**
  * @param {number} id
- * @returns {{ id: number, stored_filename: string, original_filename: string | null, mimetype: string, size_bytes: number, merchant_name: string | null, transaction_date: string | null, currency: string | null, subtotal: number | null, tax_total: number | null, tip_total: number | null, miscellaneous_charges_total: number | null, total: number | null, grand_total: number | null, split_party_size: number, created_at: string } | undefined}
+ * @returns {{ id: number, stored_filename: string, original_filename: string | null, mimetype: string, size_bytes: number, merchant_name: string | null, transaction_date: string | null, currency: string | null, subtotal: number | null, tax_total: number | null, tip_total: number | null, miscellaneous_charges_total: number | null, total: number | null, grand_total: number | null, split_party_size: number, vision_error_message: string | null, created_at: string } | undefined}
  */
 export function getReceiptById(id) {
   const n = Number(id);
@@ -127,7 +132,7 @@ export function getReceiptById(id) {
     `SELECT id, stored_filename, original_filename, mimetype, size_bytes,
             merchant_name, transaction_date, currency,
             subtotal, tax_total, tip_total, miscellaneous_charges_total, total, grand_total,
-            split_party_size, created_at
+            split_party_size, vision_error_message, created_at
      FROM receipt_uploads
      WHERE id = ?`,
   );

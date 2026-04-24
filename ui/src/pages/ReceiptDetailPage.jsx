@@ -71,6 +71,22 @@ export default function ReceiptDetailPage() {
     [receipt],
   );
 
+  /** Line-level claim UI follows `claimMessages` so new posts apply without refetch. */
+  const receiptClaimsFlat = useMemo(() => {
+    const out = [];
+    for (const m of claimMessages) {
+      if (Array.isArray(m.claims)) {
+        for (const c of m.claims) {
+          out.push(c);
+        }
+      }
+    }
+    if (out.length > 0) {
+      return out;
+    }
+    return Array.isArray(receipt?.receipt_claims) ? receipt.receipt_claims : [];
+  }, [claimMessages, receipt]);
+
   useEffect(() => {
     setClaimMessages(claimMessagesFromReceipt);
   }, [id, claimMessagesFromReceipt]);
@@ -111,6 +127,7 @@ export default function ReceiptDetailPage() {
 
       <ReceiptLineItems
         lineItems={lineItems}
+        receiptClaims={receiptClaimsFlat}
         mimetype={receipt.mimetype}
         currency={receipt.currency}
       />

@@ -2,11 +2,11 @@ import { appendFile, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
-import { ChatOpenAI } from "@langchain/openai";
+import { initChatModel } from "langchain/chat_models/universal";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { createAgent } from "langchain";
 import { mapAiConfigTools } from "./toolsHelper.js";
-import { aiClient } from "../ld.js";
+import { aiClient, ldClient } from "../ld.js";
 import { LangChainProvider } from "@launchdarkly/server-sdk-ai-langchain";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -51,31 +51,25 @@ async function appendReceiptVisionCsv(dataUrl, dataObj) {
 }
 
 async function invokeReceiptItemizerAgent(agent, dataUrl) {
-  return agent.invoke({
+  const response = await agent.invoke({
     messages: [
       new HumanMessage({
-        content: [
-          {
-            type: "image_url",
-            image_url: { url: dataUrl },
-          },
-        ],
+        content: [{ type: "image_url", image_url: { url: dataUrl } }],
       }),
     ],
   });
+  const lastAi = response.messages
+    .filter((m) => AIMessage.isInstance(m))
+    .at(-1);
+  if (!lastAi) {
+    throw new Error("Receipt itemizer returned no assistant message.");
+  }
+
+  return lastAi;
 }
 
 export async function analyzeReceiptImage(filePath, mediaType) {
   const defaultLdContext = { kind: "user", key: "receipt_itemization" };
-  const defaultInstructions =
-    "You extract structured data from receipt photos. Prefer values printed on the receipt; use 0 for unknown amounts and empty string only when a text field is missing.";
-
-  const defaultAIAgentConfig = {
-    enabled: true,
-    model: { name: "gpt-4o" },
-    provider: { name: "openai" },
-    instructions: defaultInstructions,
-  };
 
   const imageB64 = (await readFile(filePath)).toString("base64");
   const dataUrl = `data:${mediaType};base64,${imageB64}`;
@@ -93,12 +87,11 @@ export async function analyzeReceiptImage(filePath, mediaType) {
     );
   }
 
-  const model = new ChatOpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-    model: agentConfig.model?.name ?? defaultAIAgentConfig.model.name,
-    temperature:
-      agentConfig.model?.parameters?.temperature ??
-      defaultAIAgentConfig.model.parameters.temperature,
+  const modelName = agentConfig.model.name;
+  const modelTemperature = agentConfig.model.parameters.temperature;
+
+  const model = await initChatModel(modelName, {
+    temperature: modelTemperature,
   });
 
   const { tracker } = agentConfig;
@@ -107,17 +100,14 @@ export async function analyzeReceiptImage(filePath, mediaType) {
     model,
     tools: mapAiConfigTools(agentConfig),
     systemPrompt: agentConfig.instructions,
+    responseFormat: agentConfig.model.custom.schema,
   });
 
-  const { messages } = await tracker.trackMetricsOf(
+  const aiMessage = await tracker.trackMetricsOf(
     LangChainProvider.getAIMetricsFromResponse,
     () => invokeReceiptItemizerAgent(agent, dataUrl),
   );
 
-  const lastAi = messages.filter((m) => AIMessage.isInstance(m)).at(-1);
-  if (!lastAi) {
-    throw new Error("Receipt itemizer returned no assistant message.");
-  }
-  const data = JSON.parse(lastAi.text);
+  const data = JSON.parse(aiMessage.text);
   return data;
 }

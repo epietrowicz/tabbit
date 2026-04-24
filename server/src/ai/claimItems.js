@@ -2,7 +2,7 @@ import { aiClient } from "../ld.js";
 import { ChatOpenAI } from "@langchain/openai";
 import { LangChainProvider } from "@launchdarkly/server-sdk-ai-langchain";
 import { mapAiConfigTools } from "./toolsHelper.js";
-import { AIMessage, createAgent, HumanMessage } from "langchain";
+import { AIMessage, createAgent, HumanMessage, initChatModel } from "langchain";
 
 const defaultLdContext = { kind: "user", key: "claim-parser" };
 const defaultAIAgentConfig = {
@@ -144,13 +144,22 @@ export function buildReceiptClaimRows(
 }
 
 async function invokeClaimAgent(agent, plainText) {
-  return agent.invoke({
+  const response = await agent.invoke({
     messages: [
       new HumanMessage({
         content: plainText,
       }),
     ],
   });
+
+  const lastAi = response.messages
+    .filter((m) => AIMessage.isInstance(m))
+    .at(-1);
+  if (!lastAi) {
+    throw new Error("Claim agent returned no assistant message.");
+  }
+
+  return lastAi;
 }
 
 export async function parsePlainTextToReceiptClaims(
@@ -176,12 +185,11 @@ export async function parsePlainTextToReceiptClaims(
     throw new Error("Claim parser AI config is disabled or missing a tracker.");
   }
 
-  const model = new ChatOpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-    model: agentConfig.model?.name ?? defaultAIAgentConfig.model.name,
-    temperature:
-      agentConfig.model?.parameters?.temperature ??
-      defaultAIAgentConfig.model.parameters.temperature,
+  const modelName = agentConfig.model.name;
+  const modelTemperature = agentConfig.model.parameters.temperature;
+
+  const model = await initChatModel(modelName, {
+    temperature: modelTemperature,
   });
 
   const { tracker } = agentConfig;
@@ -190,21 +198,20 @@ export async function parsePlainTextToReceiptClaims(
     model,
     tools: mapAiConfigTools(agentConfig),
     systemPrompt: agentConfig.instructions,
+    responseFormat: agentConfig.model.custom.schema,
   });
 
-  const { messages } = await tracker.trackMetricsOf(
+  const aiMessage = await tracker.trackMetricsOf(
     LangChainProvider.getAIMetricsFromResponse,
     () => invokeClaimAgent(agent, plainText),
   );
 
-  const lastAi = messages.filter((m) => AIMessage.isInstance(m)).at(-1);
-  if (!lastAi) {
-    throw new Error("Claim agent returned no assistant message.");
-  }
-  const raw = JSON.parse(lastAi.content);
-  console.log(raw);
-  const allocations = Array.isArray(raw.allocations)
-    ? raw.allocations.map((a) => ({
+  const data = JSON.parse(aiMessage.text);
+
+  console.log(data);
+
+  const allocations = Array.isArray(data.allocations)
+    ? data.allocations.map((a) => ({
         lineItemId: Number(a.lineItemId),
         quantityClaimed: Number(a.quantityClaimed),
         notes: typeof a.notes === "string" ? a.notes : "",
